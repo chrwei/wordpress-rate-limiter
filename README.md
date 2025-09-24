@@ -1,6 +1,10 @@
-# Network Rate Limiter (Progressive, Time-Aware)
+# Network Rate Limiter (Progressive, Time-Aware) - Fighting bots and abuse on WordPress
+
+![WP Rate Limiter](https://blog.greggant.com/images/posts/2025-09-24-ratelimiter.png)
 
 ## What This Plugin Does
+
+If you want a more digestable version, I wrotea  [blog post with a more in depth explanation](https://blog.greggant.com/posts/2025/09/24/wordpress-rate-limter.html)
 
 This WordPress plugin protects your site from abuse by limiting how many requests each visitor can make to sensitive endpoints like login pages, admin interfaces, and APIs. Think of it as a smart bouncer that:
 
