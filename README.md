@@ -2,9 +2,11 @@
 
 ![WP Rate Limiter](https://blog.greggant.com/images/posts/2025-09-24-ratelimiter.png)
 
+**Version 1.1** - Production-hardened with DoS protection and security audit improvements
+
 ## What This Plugin Does
 
-If you want a more digestable version, I wrotea  [blog post with a more in depth explanation](https://blog.greggant.com/posts/2025/09/24/wordpress-rate-limter.html)
+If you want a more digestable version, I wrote a [blog post with a more in depth explanation](https://blog.greggant.com/posts/2025/09/24/wordpress-rate-limter.html)
 
 This WordPress plugin protects your site from abuse by limiting how many requests each visitor can make to sensitive endpoints like login pages, admin interfaces, and APIs. Think of it as a smart bouncer that:
 
@@ -24,6 +26,33 @@ Without rate limiting, attackers can:
 - **Exhaust server resources** through rapid-fire requests, leading to downtime or degraded performance
 
 This plugin stops these attacks while allowing normal users and legitimate bots to access your site without interference.
+
+---
+
+## Version 1.1 Security Improvements
+
+This release adds production-hardened protections against DoS attacks and operational improvements:
+
+### DoS Attack Mitigation
+- **DNS Circuit Breaker**: Limits DNS lookups to 20/minute globally; automatically disables DNS verification for 5 minutes after 5 consecutive failures to prevent DNS amplification attacks
+- **GeoIP API Rate Limiting**: Caps ip-api.com requests at 40/minute (under free tier limit) with graceful degradation to prevent quota exhaustion during distributed attacks
+- **Proper Error Handling**: Removed error suppression (@) from DNS and API calls; failures now logged with context for operational visibility
+
+### Security Hardening
+- **CF-IPCountry Validation**: CloudFlare's country header now only trusted when request originates from configured trusted proxy IPs, preventing country code spoofing
+- **Configuration Audit Trail**: All setting changes logged to PHP error log with username, user ID, site ID, and changed fields for security incident response and compliance
+- **Enhanced Validation**: Country codes validated against ISO 3166-1 alpha-2 catalog; invalid entries rejected at save time
+
+### Operational Safety
+- **Object Cache Warnings**: Prominent admin notice when Redis/Memcached not detected, explaining race condition risk and linking to installation guide
+- **Proxy Misconfiguration Detection**: Automatic warning when proxy headers detected but `trusted_proxy_ips` empty, preventing single-IP rate limiting of entire user base
+- **Improved Error Logging**: GeoIP API failures, DNS lookup failures, and rate limit exhaustion events logged with IP addresses and error context
+
+These improvements make the plugin significantly more resilient against:
+- DNS-based DoS attacks (DNS amplification, lookup flooding)
+- GeoIP API abuse (quota exhaustion, distributed cache-miss attacks)
+- Header spoofing (country code manipulation, IP address spoofing)
+- Configuration errors (CloudFlare deployments without trusted proxy config, production use without object cache)
 
 ---
 
@@ -47,13 +76,14 @@ This plugin stops these attacks while allowing normal users and legitimate bots 
 - **Built-in exceptions**: Logged-in admins, WordPress cron jobs, and site health checks are automatically exempted
 
 ### Regional Traffic Controls
-- **GeoIP detection**: Uses CloudFlare's `CF-IPCountry` header with fallback to ip-api.com (cached 24 hours)
+- **GeoIP detection**: Uses CloudFlare's `CF-IPCountry` header (validated against trusted proxies) with fallback to ip-api.com (rate-limited to 40/min, cached 24 hours)
 - **Blocked countries**: Completely block traffic from specified countries with 403 Forbidden
 - **Penalized countries**: Apply dual penalties to high-risk regions:
   - **Reduced rate limits**: Cut soft/hard thresholds by configurable percentage (default 50%)
   - **Initial violations**: Start with pre-existing violation score for faster escalation (default 2)
 - **Default lists**: North Korea and Syria blocked; Russia, China, Iran, and Belarus penalized
 - **Fully configurable**: Per-site and network-wide settings for country lists and penalty severity
+- **Security**: CF-IPCountry header only trusted from configured proxy IPs to prevent spoofing
 
 ### Network Features
 - **WordPress Multisite support**: Network-wide defaults with per-site overrides
@@ -112,8 +142,11 @@ Combined effect: Penalized countries hit rate limits faster AND get longer block
 ## Requirements
 
 - WordPress 5.8+ (PHP 7.4+)
-- Recommended: persistent object cache (Redis/Memcached) for atomic counters
-- Works without object cache using transients (non-atomic but acceptable for soft rate limiting)
+- **Strongly recommended**: Persistent object cache (Redis/Memcached) for atomic counters
+  - **Without object cache**: Rate limiting counters are non-atomic and vulnerable to race conditions under concurrent load
+  - **With object cache**: Counters are atomic, preventing attackers from bypassing limits via concurrent requests
+  - Admin UI displays a critical warning when object cache is not detected
+- **CloudFlare/Proxy users**: Must configure `trusted_proxy_ips` setting to avoid rate-limiting entire user base as single IP
 
 ---
 
@@ -147,6 +180,11 @@ Combined effect: Penalized countries hit rate limits faster AND get longer block
 
 ### Per-site (Settings → Rate Limiter)
 
+The admin interface displays prominent warnings for:
+- **Critical**: No persistent object cache detected (Redis/Memcached required for production)
+- **Warning**: Proxy headers detected but no trusted proxy IPs configured
+
+**Settings:**
 - **Enable limiter**: on/off for this site
 - **Daytime window**: start/end hour in site timezone
 - **Violation probation (hours)**: how long violation "heat" is retained before decaying
@@ -157,6 +195,7 @@ Combined effect: Penalized countries hit rate limits faster AND get longer block
   - **Penalty: limit reduction (%)**: percentage to reduce rate limits (0-100)
   - **Penalty: initial violations**: starting violation score for penalized countries (0-10)
 - **Allowlist**
+  - **Trusted proxy IPs/CIDRs**: Proxy/CDN IPs to trust for forwarded headers (e.g. CloudFlare IPs)
   - **User-Agents**: one per line (substring match)
   - **rDNS suffixes**: one per line (e.g. `.uptimerobot.com`); forward DNS re-check required
   - **IPs/CIDRs**: IPv4/IPv6; single IP or CIDR (e.g. `203.0.113.0/24`, `2a00:1a48::/32`)
@@ -180,7 +219,8 @@ Combined effect: Penalized countries hit rate limits faster AND get longer block
 - **Scope**: The limiter runs early (`muplugins_loaded`) and only inspects protected endpoints. Public page views are not affected.
 - **Exemptions**: Logged-in admins with `manage_options`, WP-Cron, Site Health endpoint, and **HTTP OPTIONS/HEAD** are skipped.
 - **Regional controls** (if enabled):
-  - GeoIP lookup via CloudFlare header or ip-api.com (cached 24h)
+  - GeoIP lookup via CloudFlare header (validated against trusted proxies) or ip-api.com (rate-limited to 40/min, cached 24h)
+  - **DNS operations**: Rate-limited to 20/min globally with circuit breaker (disables for 5min after 5 failures)
   - **Blocked countries** → immediate 403 Forbidden, no further processing
   - **Penalized countries** → reduced rate limits + initial violation score applied
 - **Time-aware thresholds**:
@@ -278,9 +318,18 @@ Example log lines:
 
 ## Security Considerations
 
-- **Trusting client IP**: The plugin tries `CF-Connecting-IP`, `X-Real-IP`, then `X-Forwarded-For` (left-most public IP), then `REMOTE_ADDR`. In proxy/CDN setups, ensure your stack only forwards trusted headers and ideally verify the edge proxy IP before trusting X-Forwarded-For.
-- **UA allowlists**: UA strings are spoofable; prefer rDNS/IP rules or a **secret header** for monitors.
-- **Bypass header**: Treat the header value as a secret. Rotate periodically.
+### IP Address Trust (v1.1+)
+- **Trusted proxy validation**: The plugin only trusts proxy headers (`CF-Connecting-IP`, `X-Real-IP`, `X-Forwarded-For`) when `REMOTE_ADDR` matches a configured `trusted_proxy_ips` entry
+- **Without trusted proxies configured**: Falls back to `REMOTE_ADDR` only, preventing header spoofing but requiring proper configuration for CloudFlare/CDN setups
+- **Admin warning**: Automatically detects when proxy headers are present but trusted proxies not configured
+- **Best practice**: Configure CloudFlare IP ranges or your CDN's edge IPs in `trusted_proxy_ips` setting
+
+### Other Security Notes
+- **UA allowlists**: UA strings are spoofable; prefer rDNS/IP rules or a **secret header** for monitors
+- **Bypass header**: Treat the header value as a secret. Rotate periodically
+- **Country header validation**: `CF-IPCountry` header only trusted from configured proxy IPs (prevents country code spoofing)
+- **Audit logging**: All configuration changes logged with user details for security incident response
+- **DoS protection**: DNS lookups and GeoIP API calls rate-limited to prevent resource exhaustion
 
 ---
 
@@ -325,6 +374,32 @@ curl -I -H 'CF-IPCountry: RU' https://example.com/wp-login.php
 
 Without CloudFlare, the plugin will use ip-api.com based on your actual IP. Use a VPN or proxy to test from different countries, or temporarily add your IP to the penalized/blocked list for testing.
 
+### Test v1.1 Security Features
+
+**DNS circuit breaker:**
+```bash
+# Check error logs for circuit breaker activation after DNS failures
+tail -f /path/to/error.log | grep netrl
+```
+
+**GeoIP API rate limiting:**
+```bash
+# Make 45+ requests from different IPs in same minute to test quota management
+# Check logs for: "[netrl] GeoIP API rate limit reached"
+```
+
+**Configuration audit logging:**
+```bash
+# Change a setting in admin UI, then check error log:
+tail -f /path/to/error.log | grep "Settings changed"
+# Should show: user, site ID, and JSON of changed fields
+```
+
+**Proxy warnings:**
+- Access admin panel without `trusted_proxy_ips` configured
+- Should see yellow warning if behind CloudFlare/proxy
+- Should see red warning if no object cache detected
+
 ---
 
 ## Troubleshooting
@@ -359,18 +434,37 @@ Without CloudFlare, the plugin will use ip-api.com based on your actual IP. Use 
 
 ## Limitations
 
-- Transient fallback isn't atomic under heavy concurrency (multiple requests can read-modify-write the same counter simultaneously, causing inaccurate counts). Use a persistent object cache in production.
+- **Object cache strongly recommended**: Transient fallback isn't atomic under heavy concurrency (multiple requests can read-modify-write the same counter simultaneously, causing inaccurate counts). Admin UI displays critical warning when not detected.
 - Only a fixed set of endpoints are protected by default (adjust in code if needed).
 - **Regional controls**:
   - GeoIP accuracy varies; VPNs, proxies, and cloud providers can be misclassified
-  - Without CloudFlare, relies on external API (ip-api.com) with rate limits (45 req/min)
-  - Initial GeoIP lookup adds latency (2s timeout) if CloudFlare header absent and cache miss
+  - Without CloudFlare, relies on external API (ip-api.com) with rate limits (40 req/min enforced in v1.1)
+  - Initial GeoIP lookup adds latency (500ms timeout in v1.1) if CloudFlare header absent and cache miss
   - Sophisticated attackers can use VPNs or proxies in non-penalized countries
+- **DNS operations**: Rate-limited to 20/min in v1.1 to prevent DoS; may impact allowlist/bot verification during high-volume attacks
 
 ---
 
-## Changelog (high-level)
+## Changelog
 
+### Version 1.1 (Security Hardening Release)
+**DoS Attack Mitigation:**
+- DNS circuit breaker: 20 lookups/min limit + automatic 5-min disable after 5 failures
+- GeoIP API rate limiting: 40 requests/min cap with graceful degradation
+- Removed @ error suppression from DNS/API operations; proper error logging added
+
+**Security Improvements:**
+- Trusted proxy validation: Only trust CF-Connecting-IP/X-Real-IP/X-Forwarded-For from configured proxy IPs
+- CF-IPCountry validation: Country header only trusted from configured proxies (anti-spoofing)
+- Configuration audit trail: All setting changes logged with user/site/changes to error log
+- Country code validation: ISO 3166-1 alpha-2 validation on save with rejection of invalid codes
+
+**Operational Safety:**
+- Admin warnings: Critical notice for missing object cache, warning for unconfigured proxies
+- Enhanced error logging: GeoIP failures, DNS failures, rate limit exhaustion logged with context
+- Proxy misconfiguration detection: Automatic warning when proxy headers present but trusted_proxy_ips empty
+
+### Version 1.0 (Initial Release)
 - **Regional traffic controls**: GeoIP-based blocking and penalties for high-risk countries
   - CloudFlare header + ip-api.com fallback with 24h caching
   - Blocked countries list (complete 403 denial)
