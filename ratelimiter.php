@@ -650,6 +650,7 @@ function netrl_next_block_secs(int $siteKey, string $ip, int $baseBlock = 120, i
 /** Map requests to rule IDs to reduce key cardinality */
 function netrl_rule_id(string $uri, string $method): ?string {
   if ($uri === '/wp-login.php') return 'login';
+  if ($uri === '/login') return 'login';
   if ($uri === '/xmlrpc.php')   return 'xmlrpc';
   if (strpos($uri, '/wp-admin/admin-ajax.php') === 0) return 'ajax';
   if (strpos($uri, '/wp-json/') === 0) return 'rest';
